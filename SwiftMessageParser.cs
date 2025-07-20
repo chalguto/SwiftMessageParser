@@ -1,3 +1,5 @@
+//            var parsedMessage = new SwiftMessageParser().Parse(mensajeSwiftMT);
+
 namespace Swift
 {
     using System;
