@@ -1,10 +1,11 @@
-//            var parsedMessage = new SwiftMessageParser().Parse(mensajeSwiftMT);
+//             var parsedMessage = new SwiftMessageParser().Parse(item.mensaje);
 
 namespace Swift
 {
     using System;
     using System.Collections.Generic;
     using System.Globalization;
+    using System.Text;
     using System.Text.RegularExpressions;
 
     /// <summary>
@@ -146,24 +147,19 @@ namespace Swift
                         message.TextBlock.BankOperationCode = tag.Value;
                         break;
                     case "32A":
-                        this.ParseCurrencyAmount(tag.Value, out DateTime date, out string currency, out decimal amount);
-                        message.TextBlock.ValueDate = date;
-                        message.TextBlock.Currency = currency;
-                        message.TextBlock.Amount = amount;
+                        message.TextBlock.CurrencyAmount32A = CurrencyAmount.Parse(tag.Value);
                         break;
                     case "33B":
-                        this.ParseCurrencyAmount(tag.Value, out _, out string currency33B, out decimal amount33B);
-                        message.TextBlock.Currency33B = currency33B;
-                        message.TextBlock.Amount33B = amount33B;
+                        message.TextBlock.CurrencyAmount33B = CurrencyAmount.Parse(tag.Value);
                         break;
                     case "50K":
-                        message.TextBlock.OrderingCustomer = tag.Value;
+                        message.TextBlock.OrderingCustomer = PartyInfo.Parse(tag.Value);
                         break;
                     case "52A":
                         message.TextBlock.OrderingInstitution = tag.Value;
                         break;
                     case "59":
-                        message.TextBlock.Beneficiary = tag.Value;
+                        message.TextBlock.Beneficiary = PartyInfo.Parse(tag.Value);
                         break;
                     case "70":
                         message.TextBlock.DetailsOfPayment = tag.Value;
@@ -226,39 +222,6 @@ namespace Swift
             }
 
             return tags;
-        }
-
-        private void ParseCurrencyAmount(string value, out DateTime date, out string currency, out decimal amount)
-        {
-            date = DateTime.MinValue;
-            currency = string.Empty;
-            amount = 0m;
-
-            if (value.Length < 11)
-            {
-                return;
-            }
-
-            try
-            {
-                // Formato: YYMMDDCURRENCYAMOUNT
-                int year = 2000 + int.Parse(value.Substring(0, 2));
-                int month = int.Parse(value.Substring(2, 2));
-                int day = int.Parse(value.Substring(4, 2));
-                date = new DateTime(year, month, day);
-
-                currency = value.Substring(6, 3);
-                string amountStr = value.Substring(9).Replace(",", ".");
-
-                if (decimal.TryParse(amountStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal parsedAmount))
-                {
-                    amount = parsedAmount;
-                }
-            }
-            catch
-            {
-                // En caso de error, dejamos los valores por defecto
-            }
         }
     }
 
@@ -397,34 +360,19 @@ namespace Swift
         public string BankOperationCode { get; set; }
 
         /// <summary>
-        /// Gets or sets the value date (part of :32A:).
-        /// </summary>
-        public DateTime ValueDate { get; set; }
-
-        /// <summary>
         /// Gets or sets the currency (part of :32A:).
         /// </summary>
-        public string Currency { get; set; }
-
-        /// <summary>
-        /// Gets or sets the amount (part of :32A:).
-        /// </summary>
-        public decimal Amount { get; set; }
+        public CurrencyAmount CurrencyAmount32A { get; set; }
 
         /// <summary>
         /// Gets or sets the currency for tag :33B:.
         /// </summary>
-        public string Currency33B { get; set; }
-
-        /// <summary>
-        /// Gets or sets the amount for tag :33B:.
-        /// </summary>
-        public decimal Amount33B { get; set; }
+        public CurrencyAmount CurrencyAmount33B { get; set; }
 
         /// <summary>
         /// Gets or sets the ordering customer (:50K:).
         /// </summary>
-        public string OrderingCustomer { get; set; }
+        public PartyInfo OrderingCustomer { get; set; }
 
         /// <summary>
         /// Gets or sets the ordering institution (:52A:).
@@ -434,7 +382,7 @@ namespace Swift
         /// <summary>
         /// Gets or sets the beneficiary (:59:).
         /// </summary>
-        public string Beneficiary { get; set; }
+        public PartyInfo Beneficiary { get; set; }
 
         /// <summary>
         /// Gets or sets the details of payment (:70:).
@@ -455,6 +403,130 @@ namespace Swift
         /// Gets or sets the sender to receiver information (:72:).
         /// </summary>
         public string SenderToReceiverInformation { get; set; }
+    }
+
+    /// <summary>
+    /// Represents party information (customer, beneficiary, etc.)
+    /// </summary>
+    public class PartyInfo
+    {
+        #region Propiedades
+
+        /// <summary>
+        /// Account of the party
+        /// </summary>
+        public string Account { get; set; }
+
+        /// <summary>
+        /// Name of the party
+        /// </summary>
+        public string Name { get; set; }
+
+        #endregion
+
+        #region Métodos públicos
+
+        /// <summary>
+        /// Parses party information from a SWIFT field (50K, 59)
+        /// </summary>
+        /// <param name="input">String with party information</param>
+        /// <returns>Parsed PartyInfo object</returns>
+        public static PartyInfo Parse(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                throw new ArgumentException("La entrada no puede estar vacía", nameof(input));
+            }
+
+            var result = new PartyInfo();
+            var parts = input.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+
+            // El primer segmento puede contener la cuenta (ej: /000002426114498)
+            if (input.StartsWith("/"))
+            {
+                var accountEnd = input.IndexOf(' ');
+                if (accountEnd > 0)
+                {
+                    result.Account = input.Substring(1, accountEnd - 1);
+                    input = input.Substring(accountEnd + 1);
+                    parts = input.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                }
+            }
+
+            if (parts.Length > 0)
+            {
+                result.Name = parts[0].Trim();
+            }
+
+            return result;
+        }
+
+        #endregion
+    }
+
+    /// <summary>
+    /// Representa información de moneda y monto en campos SWIFT (32A, 33B).
+    /// </summary>
+    public class CurrencyAmount
+    {
+        #region Propiedades
+
+        /// <summary>
+        /// Fecha de valor (YYMMDD).
+        /// </summary>
+        public DateTime? ValueDate { get; set; }
+
+        /// <summary>
+        /// Código de moneda (USD, EUR, etc.)
+        /// </summary>
+        public string Currency { get; set; }
+
+        /// <summary>
+        /// Monto de la transacción
+        /// </summary>
+        public decimal Amount { get; set; }
+
+        #endregion
+
+        #region Métodos públicos
+
+        /// <summary>
+        /// Parsea una cadena de moneda/monto en formato SWIFT
+        /// </summary>
+        /// <param name="input">Cadena en formato (YYMMDDCURRENCYAMOUNT).</param>
+        /// <returns>Objeto CurrencyAmount parseado</returns>
+        public static CurrencyAmount Parse(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                throw new ArgumentException("La entrada no puede estar vacía", nameof(input));
+            }
+
+            var result = new CurrencyAmount();
+
+            // Ejemplo: 250709USD6400,
+            if (input.Length >= 6)
+            {
+                if (DateTime.TryParseExact(input.Substring(0, 6), "yyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+                {
+                    result.ValueDate = date;
+                }
+            }
+
+            if (input.Length >= 9)
+            {
+                result.Currency = input.Substring(6, 3);
+
+                if (decimal.TryParse(input.Substring(9).Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out var amount))
+                {
+                    result.Amount = amount;
+                }
+            }
+
+            return result;
+        }
+
+        #endregion
     }
 
     /// <summary>
